@@ -3,12 +3,12 @@ import sys
 import torch
 
 from botorch.settings import debug
-from botorch.test_functions.multi_objective import VehicleSafety
+from botorch.test_functions.multi_objective import CarSideImpact
 
 from torch import Tensor
 
 torch.set_default_dtype(torch.float64)
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 debug._set_state(False)
 
 script_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
@@ -17,39 +17,23 @@ sys.path.append(script_dir[:-12])
 
 from src.experiment_manager import experiment_manager
 
-# from kumaraswamy_utility import KumaraswamyCDFProduct
-from piecewiselinear_utility import PiecewiseLinear
-
 
 # Objective function
-vehiclesafety_func = VehicleSafety(negate=True)
-input_dim = vehiclesafety_func.dim
-num_attributes = vehiclesafety_func.num_objectives
+carsideimpact_func = CarSideImpact(negate=True)
+input_dim = carsideimpact_func.dim
+num_attributes = carsideimpact_func.num_objectives
+bounds = torch.tensor(carsideimpact_func._bounds)
 
 
 def attribute_func(X: Tensor) -> Tensor:
-    X_unscaled = 2.0 * X + 1.0
-    output = vehiclesafety_func(X_unscaled)
+    X_unscaled = X * (bounds[:, 1] - bounds[:, 0]) + bounds[:, 0]
+    output = carsideimpact_func(X_unscaled)
     return output
 
 
-# normalized_attribute_bounds = torch.tensor(
-# [
-# [0, 0, 0],
-# [1, 1, 1],
-# ]
-# )
-# concentration1 = torch.tensor([0.5, 1, 1.5])
-# concentration2 = torch.tensor([1.0, 2.0, 3.0])
+def utility_func(Y: Tensor) -> Tensor:
+    return Y.sum(dim=-1)
 
-# utility_func = KumaraswamyCDFProduct(
-# concentration1=concentration1, concentration2=concentration2, Y_bounds=normalized_attribute_bounds
-# )
-
-beta1 = torch.tensor([2, 6, 8])
-beta2 = torch.tensor([1, 2, 2])
-thresholds = torch.tensor([0.5, 0.8, 0.8])
-utility_func = PiecewiseLinear(beta1=beta1, beta2=beta2, thresholds=thresholds)
 
 # Algos
 algo = "ScalarizedTS"
@@ -68,7 +52,7 @@ elif len(sys.argv) == 2:
     last_trial = int(sys.argv[1])
 
 experiment_manager(
-    problem="vehiclesafety",
+    problem="carsideimpact",
     attribute_func=attribute_func,
     utility_func=utility_func,
     input_dim=input_dim,

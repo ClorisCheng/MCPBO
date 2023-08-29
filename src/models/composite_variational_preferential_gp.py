@@ -1,10 +1,14 @@
 from typing import Optional, Tuple
 
+from copy import copy
 import torch
+
 from botorch.models.model import Model
 from botorch.posteriors import Posterior
+from gpytorch.kernels import LinearKernel
 from torch import Tensor
 
+from src.get_preferential_gp_sample import get_preferential_gp_rff_sample
 from src.models.pairwise_kernel_variational_gp import PairwiseKernelVariationalGP
 from src.models.variational_preferential_gp import VariationalPreferentialGP
 
@@ -17,7 +21,7 @@ class CompositeVariationalPreferentialGP(Model):
         queries,
         responses,
         model_id,
-        use_attribute_uncertainty=False,
+        use_attribute_uncertainty=True,
         fit_model=True,
     ) -> None:
         r""" """
@@ -26,8 +30,8 @@ class CompositeVariationalPreferentialGP(Model):
         self.use_attribute_uncertainty = use_attribute_uncertainty
 
         num_attributes = responses.shape[-1] - 1
-        attribute_models = []
-        attribute_means = []
+        attribute_samples = []
+        utility_queries = []
         attribute_lower_bounds = []
         attribute_upper_bounds = []
 
@@ -39,26 +43,28 @@ class CompositeVariationalPreferentialGP(Model):
             elif model_id == 2:
                 attribute_model = VariationalPreferentialGP(queries, responses[..., j])
 
-            attribute_posterior = attribute_model.posterior(queries)
-            attribute_mean = attribute_posterior.mean.detach()
-
-            if self.use_attribute_uncertainty:
-                attribute_std = torch.sqrt(attribute_posterior.variance.detach())
-                attribute_lower_bounds.append((attribute_mean - attribute_std).min())
-                attribute_upper_bounds.append((attribute_mean + attribute_std).max())
+            if use_attribute_uncertainty:
+                attribute_sample = get_preferential_gp_rff_sample(
+                    model=attribute_model, n_samples=1
+                )
             else:
-                attribute_lower_bounds.append(attribute_mean.min())
-                attribute_upper_bounds.append(attribute_mean.max())
-            attribute_models.append(attribute_model)
-            attribute_means.append(attribute_mean)
-        self.attribute_models = attribute_models
+                attribute_sample = copy(attribute_model)
+            attribute_sample_vals_at_queries = attribute_sample.posterior(
+                queries
+            ).mean.detach()
+            attribute_lower_bounds.append(attribute_sample_vals_at_queries.min())
+            attribute_upper_bounds.append(attribute_sample_vals_at_queries.max())
+            utility_queries.append(attribute_sample_vals_at_queries)
+            attribute_samples.append(attribute_sample)
+
+        self.attribute_samples = attribute_samples
         self.attribute_lower_bounds = torch.as_tensor(attribute_lower_bounds).to(
             device=queries.device, dtype=queries.dtype
         )
         self.attribute_upper_bounds = torch.as_tensor(attribute_upper_bounds).to(
             device=queries.device, dtype=queries.dtype
         )
-        utility_queries = torch.cat(attribute_means, dim=-1)
+        utility_queries = torch.cat(utility_queries, dim=-1)
         utility_queries = (utility_queries - self.attribute_lower_bounds) / (
             self.attribute_upper_bounds - self.attribute_lower_bounds
         )
@@ -68,8 +74,10 @@ class CompositeVariationalPreferentialGP(Model):
                 utility_queries, responses[..., -1]
             )
         elif model_id == 2:
+            # linear_kernel = LinearKernel()
             utility_model = VariationalPreferentialGP(
-                utility_queries, responses[..., -1]
+                utility_queries,
+                responses[..., -1],
             )
 
         self.utility_model = [utility_model]
@@ -95,22 +103,20 @@ class CompositeVariationalPreferentialGP(Model):
         """
 
         return MultivariateNormalComposition(
-            attribute_models=self.attribute_models,
+            attribute_models=self.attribute_samples,
             utility_model=self.utility_model,
             X=X,
             attribute_lower_bounds=self.attribute_lower_bounds,
             attribute_upper_bounds=self.attribute_upper_bounds,
-            use_attribute_uncertainty=self.use_attribute_uncertainty,
         )
 
     def forward(self, X: Tensor):
         return MultivariateNormalComposition(
-            attribute_model=self.attribute_models,
+            attribute_model=self.attribute_samples,
             utility_model=self.utility_model,
             X=X,
             attribute_lower_bounds=self.attribute_lower_bounds,
             attribute_upper_bounds=self.attribute_upper_bounds,
-            use_attribute_uncertainty=self.use_attribute_uncertainty,
         )
 
 
@@ -122,14 +128,12 @@ class MultivariateNormalComposition(Posterior):
         X,
         attribute_lower_bounds,
         attribute_upper_bounds,
-        use_attribute_uncertainty=True,
     ):
         self.attribute_models = attribute_models
         self.utility_model = utility_model
         self.X = X
         self.attribute_lower_bounds = attribute_lower_bounds
         self.attribute_upper_bounds = attribute_upper_bounds
-        self.use_attribute_uncertainty = use_attribute_uncertainty
 
     @property
     def device(self) -> torch.device:
@@ -179,23 +183,8 @@ class MultivariateNormalComposition(Posterior):
         if base_samples.shape[: len(sample_shape)] != sample_shape:
             raise RuntimeError("`sample_shape` disagrees with shape of `base_samples`.")
         attribute_samples = []
-        for j, attribute_model in enumerate(self.attribute_models):
-            attribute_multivariate_normal = attribute_model.posterior(self.X)
-            if self.use_attribute_uncertainty:
-                if base_samples is not None:
-                    attribute_samples.append(
-                        attribute_multivariate_normal.rsample(
-                            sample_shape, base_samples=base_samples[..., [j]]
-                        )  # [..., 0]
-                    )
-                else:
-                    attribute_samples.append(
-                        attribute_sample=attribute_multivariate_normal.rsample(
-                            sample_shape
-                        )  # [..., 0]
-                    )
-            else:
-                attribute_samples.append(attribute_multivariate_normal.mean)
+        for attribute_model in self.attribute_models:
+            attribute_samples.append(attribute_model.posterior(self.X).mean)
         attribute_samples = torch.cat(attribute_samples, dim=-1)
         normalized_attribute_samples = (
             attribute_samples - self.attribute_lower_bounds

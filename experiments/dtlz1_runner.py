@@ -20,19 +20,19 @@ from src.experiment_manager import experiment_manager
 
 # Objective function
 input_dim = 6
-output_dim = 2
+num_attributes = 2
 
 attribute_func = DTLZ1(dim=input_dim, negate=True)
 
 
 def utility_func(Y: Tensor) -> Tensor:
-    output = 0.5 * Y[..., 0] + 0.5 * Y[..., 1]
+    output = 0.8 * Y[..., 0] + 0.2 * Y[..., 1]
     return output
 
 
 # Algos
-algo = "qEUBO"
-model_type = "Composite"
+algo = "I-PBO-TS"
+model_type = "Multioutput"
 
 # estimate noise level
 comp_noise_type = "logit"
@@ -47,19 +47,19 @@ elif len(sys.argv) == 2:
     last_trial = int(sys.argv[1])
 
 experiment_manager(
-    problem="dtlz1_0.5_0.5",
-    obj_func=attribute_func,
+    problem="dtlz1",
+    attribute_func=attribute_func,
     utility_func=utility_func,
     input_dim=input_dim,
-    output_dim=output_dim,
+    num_attributes=num_attributes,
     comp_noise_type=comp_noise_type,
     comp_noise=noise_level,
     algo=algo,
     model_type=model_type,
     batch_size=2,
-    num_init_queries=4 * input_dim,
-    num_algo_iter=100,
+    num_init_queries=2 * (input_dim + 1),
+    num_algo_iter=75,
     first_trial=first_trial,
     last_trial=last_trial,
-    restart=False,
+    restart=True,
 )

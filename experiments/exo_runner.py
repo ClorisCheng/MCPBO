@@ -3,12 +3,13 @@ import os
 import sys
 import torch
 
+from botorch.models.gp_regression import SingleTaskGP
+from botorch.models.transforms.outcome import Standardize
 from botorch.settings import debug
-from copy import deepcopy
 from torch import Tensor
 
 torch.set_default_dtype(torch.float64)
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 debug._set_state(False)
 
 script_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
@@ -16,42 +17,38 @@ print(script_dir[:-12])
 sys.path.append(script_dir[:-12])
 
 from src.experiment_manager import experiment_manager
-from src.models.pairwise_kernel_variational_gp import PairwiseKernelVariationalGP
 
 
 # Objective function
 input_dim = 5
-num_attributes = 3
+num_attributes = 4
 
-attribute_surrogates = []
+inputs = torch.tensor(np.loadtxt("exo_data/inputs.txt"))
+attribute_vals = torch.tensor(np.loadtxt("exo_data/normalized_attribute_vals.txt"))[
+    ..., [1, 2, 5, 6]
+]
+model = SingleTaskGP(
+    train_X=inputs, train_Y=attribute_vals, outcome_transform=Standardize(4)
+)
+model.load_state_dict(torch.load("exo_data/exo_surrogate_state_dict.json"), strict=True)
+model.eval()
 
-queries = np.loadtxt("queries.txt")
-queries = queries.reshape(queries.shape[0], 2, int(queries.shape[1] / 2))
-queries = torch.tensor(queries)
-responses = torch.tensor(np.loadtxt("responses.txt"))
-
-for i in range(3):
-    model = PairwiseKernelVariationalGP(queries, responses[..., i], fit_aux_model_flag=False)
-    model.load_state_dict(torch.load("exo_surrogate_state_dict_" + str(i) + ".json"), strict=True)
-    model.eval()
-    attribute_surrogates.append(deepcopy(model))
 
 def attribute_func(X: Tensor) -> Tensor:
-    output = []
-    for i in range(3):
-        output.append(attribute_surrogates[i](X).mean.detach())
-    output = torch.cat(output, dim=-1)
-    return output
+    return model.posterior(X).mean.detach()
 
-target_vector = torch.tensor([-0.5826,  0.1094, -0.1175])
+
+target_vector = torch.tensor([-0.5826, 0.1094, -0.1175, 0.1])
+
 
 def utility_func(Y: Tensor) -> Tensor:
-    output = -((Y- target_vector)**2).sum(dim=-1)
+    output = -((Y - target_vector) ** 2).sum(dim=-1)
     return output
 
+
 # Algos
-algo = "qEUBO"
-model_type = "Standard"
+algo = "I-PBO-TS"
+model_type = "Multioutput"
 
 # estimate noise level
 comp_noise_type = "logit"
@@ -76,9 +73,9 @@ experiment_manager(
     algo=algo,
     model_type=model_type,
     batch_size=2,
-    num_init_queries=4 * input_dim,
-    num_algo_iter=100,
+    num_init_queries=2 * (input_dim + 1),
+    num_algo_iter=75,
     first_trial=first_trial,
     last_trial=last_trial,
-    restart=False,
+    restart=True,
 )

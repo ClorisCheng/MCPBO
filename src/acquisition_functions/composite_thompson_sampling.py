@@ -6,7 +6,7 @@ from copy import copy
 import torch
 
 from src.acquisition_functions.composite_posterior_mean import CompositePosteriorMean
-from src.acquisition_functions.thompson_sampling import get_pairwise_gp_rff_sample
+from src.get_preferential_gp_sample import get_preferential_gp_rff_sample
 from src.models.pairwise_kernel_variational_gp import PairwiseKernelVariationalGP
 from src.models.variational_preferential_gp import VariationalPreferentialGP
 from src.utils import optimize_acqf_and_get_suggested_query
@@ -20,7 +20,7 @@ def gen_composite_thompson_sampling_query(
     num_restarts,
     raw_samples,
     model_id,
-    use_attribute_uncertainty=False,
+    use_attribute_uncertainty=True,
 ):
     num_attributes = responses.shape[-1] - 1
     attribute_models = []
@@ -34,7 +34,7 @@ def gen_composite_thompson_sampling_query(
 
     query = []
 
-    for _ in range(num_alternatives):
+    for i in range(num_alternatives):
         attribute_samples = []
         utility_queries = []
         attribute_lower_bounds = []
@@ -42,7 +42,7 @@ def gen_composite_thompson_sampling_query(
 
         for attribute_model in attribute_models:
             if use_attribute_uncertainty:
-                attribute_sample = get_pairwise_gp_rff_sample(
+                attribute_sample = get_preferential_gp_rff_sample(
                     model=attribute_model, n_samples=1
                 )
             else:
@@ -66,16 +66,19 @@ def gen_composite_thompson_sampling_query(
             attribute_upper_bounds - attribute_lower_bounds
         )
 
-        if model_id == 1:
-            utility_model = PairwiseKernelVariationalGP(
-                utility_queries, responses[..., -1]
-            )
-        elif model_id == 2:
-            utility_model = VariationalPreferentialGP(
-                utility_queries, responses[..., -1]
-            )
+        if use_attribute_uncertainty or i == 0:
+            if model_id == 1:
+                utility_model = PairwiseKernelVariationalGP(
+                    utility_queries, responses[..., -1]
+                )
+            elif model_id == 2:
+                utility_model = VariationalPreferentialGP(
+                    utility_queries, responses[..., -1]
+                )
 
-        utility_sample = get_pairwise_gp_rff_sample(model=utility_model, n_samples=1)
+        utility_sample = get_preferential_gp_rff_sample(
+            model=utility_model, n_samples=1
+        )
         acquisition_function = CompositePosteriorMean(
             attribute_models=attribute_samples,
             utility_model=utility_sample,
