@@ -9,25 +9,32 @@ def get_noise_level(
 ):
     X = torch.rand([num_samples, input_dim])
     Y = obj_func(X)
-    target_Y = Y.sort().values[-int(num_samples * top_proportion) :]
-    target_Y = target_Y[torch.randperm(target_Y.shape[0])]
-    target_Y = target_Y.reshape(-1, 2)
+    noise_levels = []
+    for j in range(Y.shape[-1]):
+        print(j)
+        target_Y = Y[..., j]
+        target_Y = target_Y.sort().values[-int(num_samples * top_proportion) :]
+        target_Y = target_Y[torch.randperm(target_Y.shape[0])]
+        target_Y = target_Y.reshape(-1, 2)
 
-    # estimate probit error
-    true_comps = target_Y[:, 0] > target_Y[:, 1]
+        # estimate probit error
+        true_comps = target_Y[:, 0] > target_Y[:, 1]
 
-    res = minimize(
-        error_rate_loss,
-        x0=0.01,
-        args=(target_Y, true_comps, target_error, comp_noise_type),
-    )
-    print(res)
+        res = minimize(
+            error_rate_loss,
+            x0=0.01,
+            args=(target_Y, true_comps, target_error, comp_noise_type),
+        )
+        print(res)
 
-    noise_level = res.x[0]
+        noise_level = res.x[0]
 
-    error_rate = estimate_error_rate(noise_level, target_Y, true_comps, comp_noise_type)
-    print(error_rate)
-    return noise_level
+        error_rate = estimate_error_rate(
+            noise_level, target_Y, true_comps, comp_noise_type
+        )
+        print(error_rate)
+        noise_levels.append(noise_level)
+    return noise_levels
 
 
 def estimate_error_rate(noise_scale, obj_vals, true_comps, comp_noise_type):

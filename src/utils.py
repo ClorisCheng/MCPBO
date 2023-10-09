@@ -24,46 +24,32 @@ from src.models.pairwise_kernel_variational_gp import PairwiseKernelVariationalG
 def fit_model(
     queries: Tensor,
     responses: Tensor,
-    model_type: str,
     model_id: int,
     algo: str,
 ):
+    if model_id == 1:
+        Model = PairwiseKernelVariationalGP
+    elif model_id == 2:
+        Model = VariationalPreferentialGP
+
     for i in range(10):
         try:
-            if algo == "I-PBO-TS":
-                if model_id == 1:
-                    model = PairwiseKernelVariationalGP(queries, responses)
-                elif model_id == 2:
-                    model = VariationalPreferentialGP(queries, responses)
-            elif model_type == "Standard":
-                if model_id == 1:
-                    model = PairwiseKernelVariationalGP(queries, responses[..., -1])
-                elif model_id == 2:
-                    model = VariationalPreferentialGP(queries, responses[..., -1])
-            elif model_type == "Composite":
-                model = CompositeVariationalPreferentialGP(
-                    queries,
-                    responses,
-                    use_attribute_uncertainty=True,
-                    model_id=model_id,
-                )
-            elif model_type == "Multioutput":
+            if algo == "Random":
+                model = None
+            elif algo == "I-PBO-DTS":
+                model = Model(queries, responses)
+            elif algo == "SDTS":
                 models = []
-                num_attributes = responses.shape[-1] - 1
+                num_attributes = responses.shape[-1]
 
                 for j in range(num_attributes):
-                    if model_id == 1:
-                        model = PairwiseKernelVariationalGP(queries, responses[..., j])
-                    elif model_id == 2:
-                        model = VariationalPreferentialGP(queries, responses[..., j])
-
+                    model = Model(queries, responses[..., j])
                     models.append(model)
-                model = ModelListGP(*models)
 
+                model = ModelListGP(*models)
             return model
         except:
             print("Number of failed attempts to train the model: " + str(i + 1))
-    return model
 
 
 def generate_initial_data(
@@ -71,7 +57,6 @@ def generate_initial_data(
     batch_size: int,
     input_dim: int,
     attribute_func,
-    utility_func,
     comp_noise_type,
     comp_noise,
     algo,
@@ -79,13 +64,9 @@ def generate_initial_data(
 ):
     # generates initial data
     queries = generate_random_queries(num_queries, batch_size, input_dim, seed)
-    attribute_vals, utility_vals = get_attribute_and_utility_vals(
-        queries, attribute_func, utility_func
-    )
-    responses = generate_responses(
-        attribute_vals, utility_vals, comp_noise_type, comp_noise, algo
-    )
-    return queries, attribute_vals, utility_vals, responses
+    attribute_vals = get_attribute_vals(queries, attribute_func)
+    responses = generate_responses(attribute_vals, comp_noise_type, comp_noise, algo)
+    return queries, attribute_vals, responses
 
 
 def generate_random_queries(
@@ -102,26 +83,22 @@ def generate_random_queries(
     return queries
 
 
-def get_attribute_and_utility_vals(queries, attribute_func, utility_func):
+def get_attribute_vals(queries, attribute_func):
     queries_2d = queries.reshape(
         torch.Size([queries.shape[0] * queries.shape[1], queries.shape[2]])
     )
 
     attribute_vals = attribute_func(queries_2d)
-    utility_vals = utility_func(attribute_vals)
     attribute_vals = attribute_vals.reshape(
         torch.Size([queries.shape[0], queries.shape[1], attribute_vals.shape[1]])
     )
-    utility_vals = utility_vals.reshape(
-        torch.Size([queries.shape[0], queries.shape[1]])
-    )
-    return attribute_vals, utility_vals
+    return attribute_vals
 
 
-def generate_responses(attribute_vals, utility_vals, noise_type, noise_level, algo):
-    # generates simulated (noisy) comparisons based on true underlying attribute and utility values
+def generate_responses(attribute_vals, noise_type, noise_level, algo):
+    # generates simulated (noisy) comparisons based on true underlying attribute values
     corrupted_attribute_vals = corrupt_vals(attribute_vals, noise_type, noise_level)
-    if algo == "I-PBO-TS":
+    if algo == "I-PBO-DTS":
         weights = sample_simplex(d=attribute_vals.shape[-1]).squeeze()
         chebyshev_scalarization = get_chebyshev_scalarization(
             weights=weights,
@@ -131,35 +108,30 @@ def generate_responses(attribute_vals, utility_vals, noise_type, noise_level, al
         responses = torch.argmax(corrupted_scalarization_vals, dim=-1)
 
     else:
-        responses_attribute_vals = torch.argmax(corrupted_attribute_vals, dim=-2)
-        corrupted_utility_vals = corrupt_vals(utility_vals, noise_type, noise_level)
-        response_utility = torch.argmax(corrupted_utility_vals, dim=-1)
-        responses = torch.cat(
-            [responses_attribute_vals, response_utility.unsqueeze(-1)], dim=-1
-        )
+        responses = torch.argmax(corrupted_attribute_vals, dim=-2)
     return responses
 
 
 def corrupt_vals(vals, noise_type, noise_level):
-    # corrupts (attribute or utility) values to simulate noise in the DM's responses
+    # corrupts attribute values to simulate noise in the DM's responses
     if noise_type == "noiseless":
         corrupted_vals = vals
     elif noise_type == "probit":
         normal = Normal(torch.tensor(0.0), torch.tensor(noise_level))
-        noise = normal.sample(sample_shape=vals.shape)
+        noise = gumbel.sample(sample_shape=vals.shape[:-1])
         corrupted_vals = vals + noise
     elif noise_type == "logit":
         gumbel = Gumbel(torch.tensor(0.0), torch.tensor(noise_level))
-        noise = gumbel.sample(sample_shape=vals.shape)
+        noise = gumbel.sample(sample_shape=vals.shape[:-1])
         corrupted_vals = vals + noise
     elif noise_type == "constant":
         corrupted_vals = vals.clone()
-        n = vals.shape[0]
-        for i in range(n):
-            coin_toss = Bernoulli(noise_level).sample().item()
-            if coin_toss == 1.0:
-                corrupted_vals[i, 0] = vals[i, 1]
-                corrupted_vals[i, 1] = vals[i, 0]
+        for i in range(vals.shape[0]):
+            for j in range(vals.shape[-1]):
+                coin_toss = Bernoulli(noise_level).sample().item()
+                if coin_toss == 1.0:
+                    corrupted_vals[i, 0, j] = vals[i, 1, j]
+                    corrupted_vals[i, 1, j] = vals[i, 0, j]
     return corrupted_vals
 
 
@@ -220,31 +192,3 @@ def optimize_acqf_and_get_suggested_query(
     # print(candidates.squeeze())
     new_x = get_best_candidates(batch_candidates=candidates, batch_values=acq_values)
     return new_x
-
-
-def compute_posterior_mean_maximizer(
-    model: Model,
-    model_type,
-    input_dim: int,
-) -> Tensor:
-    standard_bounds = torch.tensor([[0.0] * input_dim, [1.0] * input_dim])
-    num_restarts = 4 * input_dim
-    raw_samples = 120 * input_dim
-
-    if model_type == "Standard":
-        post_mean_func = PosteriorMean(model=model)
-    elif model_type == model_type == "Composite":
-        # sampler = SobolQMCNormalSampler(num_samples=64, collapse_batch_dims=True)
-        #
-        sampler = SobolQMCNormalSampler(sample_shape=torch.Size([64]))
-
-        # ==== TODO: check if this is the right way to do this ====
-        post_mean_func = qSimpleRegret(model=model, sampler=sampler)
-    max_post_mean_func = optimize_acqf_and_get_suggested_query(
-        acq_func=post_mean_func,
-        bounds=standard_bounds,
-        batch_size=1,
-        num_restarts=num_restarts,
-        raw_samples=raw_samples,
-    )
-    return max_post_mean_func
