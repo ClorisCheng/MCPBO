@@ -20,18 +20,25 @@ def gen_thompson_sampling_query(
     bounds,
     num_restarts,
     raw_samples,
-    scalarize=False,
+    scalarize=True,
+    fix_scalarization=True,
 ):
     query = []
     if scalarize:
         mean_train_inputs = model.posterior(model.train_inputs[0][0]).mean.detach()
-        weights = sample_simplex(mean_train_inputs.shape[-1]).squeeze()
-        chebyshev_scalarization = GenericMCObjective(
-            get_chebyshev_scalarization(weights=weights, Y=mean_train_inputs)
-        )
+        if fix_scalarization:
+            weights = sample_simplex(mean_train_inputs.shape[-1]).squeeze()
+            chebyshev_scalarization = GenericMCObjective(
+                get_chebyshev_scalarization(weights=weights, Y=mean_train_inputs)
+            )
     for _ in range(num_alternatives):
         model_rff_sample = get_preferential_gp_rff_sample(model=model, n_samples=1)
         if scalarize:
+            if not fix_scalarization:
+                weights = sample_simplex(mean_train_inputs.shape[-1]).squeeze()
+                chebyshev_scalarization = GenericMCObjective(
+                    get_chebyshev_scalarization(weights=weights, Y=mean_train_inputs)
+                )
             acquisition_function = ScalarizedPosteriorMean(
                 model=model_rff_sample, objective=chebyshev_scalarization
             )

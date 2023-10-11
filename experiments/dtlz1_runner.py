@@ -23,10 +23,12 @@ num_attributes = 2
 attribute_func = DTLZ1(dim=input_dim, negate=True)
 
 # Algos
-algo = "SDTS"
+# algo = "SDTS"
+algo = "SDTS-HS"
 # algo = "I-PBO-DTS"
+# algo = "Random"
 
-# estimate noise level
+# Estimate noise level
 comp_noise_type = "logit"
 if False:
     noise_level = get_noise_level(
@@ -40,7 +42,7 @@ if False:
     print(noise_level)
     print(e)
 
-noise_level = [0.0, 0.0]  # [0.4521, 0.4521]
+noise_level = [0.4521, 0.4521]
 
 # Run experiment
 if len(sys.argv) == 3:

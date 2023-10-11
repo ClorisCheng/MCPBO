@@ -39,7 +39,10 @@ def mcpbo_trial(
     model_id: int = 2,
     algo_params: Optional[Dict] = None,
 ) -> None:
-    algo_id = algo + "_" + str(batch_size)  # Append q to algo ID
+    if batch_size > 2:
+        algo_id = algo + "_" + str(batch_size)  # Append q to algo ID
+    else:
+        algo_id = algo
 
     # get script directory
     script_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
@@ -259,6 +262,17 @@ def get_new_suggested_query(
             num_restarts,
             raw_samples,
             scalarize=True,
+            fix_scalarization=True,
+        )
+    elif algo == "SDTS-HS":
+        new_query = gen_thompson_sampling_query(
+            model,
+            batch_size,
+            standard_bounds,
+            num_restarts,
+            raw_samples,
+            scalarize=True,
+            fix_scalarization=False,
         )
     elif algo == "I-PBO-DTS":
         new_query = gen_thompson_sampling_query(

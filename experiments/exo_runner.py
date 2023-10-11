@@ -17,18 +17,21 @@ print(script_dir[:-12])
 sys.path.append(script_dir[:-12])
 
 from src.experiment_manager import experiment_manager
+from src.get_noise_level import get_noise_level
 
 
 # Objective function
 input_dim = 5
-num_attributes = 4
+num_attributes = 3
 
 inputs = torch.tensor(np.loadtxt("exo_data/inputs.txt"))
 attribute_vals = torch.tensor(np.loadtxt("exo_data/normalized_attribute_vals.txt"))[
-    ..., [1, 2, 5, 6]
-]
+    ..., [1, 2, 5]
+]  # ID of fourth attribute: 6
 model = SingleTaskGP(
-    train_X=inputs, train_Y=attribute_vals, outcome_transform=Standardize(4)
+    train_X=inputs,
+    train_Y=attribute_vals,
+    outcome_transform=Standardize(num_attributes),
 )
 model.load_state_dict(torch.load("exo_data/exo_surrogate_state_dict.json"), strict=True)
 model.eval()
@@ -38,21 +41,27 @@ def attribute_func(X: Tensor) -> Tensor:
     return model.posterior(X).mean.detach()
 
 
-target_vector = torch.tensor([-0.5826, 0.1094, -0.1175, 0.1])
-
-
-def utility_func(Y: Tensor) -> Tensor:
-    output = -((Y - target_vector) ** 2).sum(dim=-1)
-    return output
-
-
 # Algos
-algo = "I-PBO-TS"
-model_type = "Multioutput"
+# algo = "SDTS"
+# algo = "SDTS-HS"
+# algo = "I-PBO-DTS"
+algo = "Random"
 
-# estimate noise level
+# Estimate noise level
 comp_noise_type = "logit"
-noise_level = 0.0001
+if False:
+    noise_level = get_noise_level(
+        attribute_func,
+        input_dim,
+        target_error=0.2,
+        top_proportion=0.01,
+        num_samples=10000,
+        comp_noise_type=comp_noise_type,
+    )
+    print(noise_level)
+    print(e)
+
+noise_level = [0.0169, 0.0082, 0.0028]
 
 # Run experiment
 if len(sys.argv) == 3:
@@ -65,16 +74,14 @@ elif len(sys.argv) == 2:
 experiment_manager(
     problem="exo",
     attribute_func=attribute_func,
-    utility_func=utility_func,
     input_dim=input_dim,
     num_attributes=num_attributes,
     comp_noise_type=comp_noise_type,
     comp_noise=noise_level,
     algo=algo,
-    model_type=model_type,
     batch_size=2,
     num_init_queries=2 * (input_dim + 1),
-    num_algo_iter=75,
+    num_algo_iter=100,
     first_trial=first_trial,
     last_trial=last_trial,
     restart=True,

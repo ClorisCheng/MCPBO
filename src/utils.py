@@ -14,9 +14,6 @@ from botorch.utils.sampling import sample_simplex
 from torch import Tensor
 from torch.distributions import Bernoulli, Normal, Gumbel
 
-from src.models.composite_variational_preferential_gp import (
-    CompositeVariationalPreferentialGP,
-)
 from src.models.variational_preferential_gp import VariationalPreferentialGP
 from src.models.pairwise_kernel_variational_gp import PairwiseKernelVariationalGP
 
@@ -38,7 +35,7 @@ def fit_model(
                 model = None
             elif algo == "I-PBO-DTS":
                 model = Model(queries, responses)
-            elif algo == "SDTS":
+            elif "SDTS" in algo:
                 models = []
                 num_attributes = responses.shape[-1]
 
